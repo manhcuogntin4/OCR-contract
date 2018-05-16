@@ -12,12 +12,18 @@ import shutil
 import argparse
 import glob
 import re
+import pytesseract
+from nltk.tokenize import sent_tokenize, word_tokenize
 reload(sys)
 
 # os call 
 
 def convert_pdf_png(filename):
 	rc=subprocess.check_call(["./convert_pdf_png.sh", filename])
+
+def convert_tif_png(filename):
+	rc=subprocess.check_call(["./convert_tif_png.sh", filename])
+
 
 
 #File and folder 
@@ -50,6 +56,13 @@ def read_file_folder(folder_name, str_type):
 
 
 #image processing
+
+def check_image(img):
+	if img is not None:
+		return True
+	else:
+		return False
+
 def crop_image(img, xmin, xmax,ymin, ymax):
 	return img[ymin:ymax, xmin:xmax]
 
@@ -74,21 +87,23 @@ def resize_image(img, w, h):
 	res = cv2.resize(img,(w, h), interpolation = cv2.INTER_CUBIC)
 	return res
 
-def write_crop_img(filename,str_ext,reg_string):
+def write_crop_img(filename,str_ext,reg_string, xmin,xmax,ymin,ymax):
 	if check_file_name(filename, reg_string):
 			print "here"
 			img=cv2.imread(filename,0)
-			parap_img=crop_image(img, 1090,1428, 2038, 2228)
+			img= resize_image(img,1653, 2339)
+			#parap_img=crop_image(img, 1090,1428, 2038, 2228)
+			parap_img=crop_image(img, xmin,xmax, ymin, ymax)
 			base_name=get_base_name(filename)
 			dirname=get_path_name(filename)
-			parap_img_path=set_file_name(dirname, base_name, "_parap.png")
+			parap_img_path=set_file_name(dirname, base_name, str_ext)
 			print parap_img_path
 			cv2.imwrite(parap_img_path, parap_img)
 
 def rotate_image(img):
 	return 0
 
-# String processing
+# Text and string processing
 
 def check_file_name(filename, reg_string):
 	regexex=reg_string
@@ -96,6 +111,134 @@ def check_file_name(filename, reg_string):
 		return True
 	else:
 		return False
+
+def levenshteinDistance(s1, s2):
+    if len(s1) > len(s2):
+        s1, s2 = s2, s1
+
+    distances = range(len(s1) + 1)
+    for i2, c2 in enumerate(s2):
+        distances_ = [i2+1]
+        for i1, c1 in enumerate(s1):
+            if c1 == c2:
+                distances_.append(distances[i1])
+            else:
+                distances_.append(1 + min((distances[i1], distances[i1 + 1], distances_[-1])))
+        distances = distances_
+    return distances[-1]
+
+def search_line(corpus, str_search, threshold=1):
+	lines= sent_tokenize(corpus)
+	#print len(lines)
+	if len(lines)!=0:
+		for line in lines:
+			#print(word_tokenize(line))
+			words=line.split(" ")
+			#print words
+			for word in words:
+				d=levenshteinDistance(str_search, word)
+				if d<=threshold: # threshold is number of diffirent words
+					return line
+	else:
+		line=corpus
+		words=line.split(" ")
+			#print words
+		for word in words:
+			d=levenshteinDistance(str_search, word)
+			if d<=threshold: # threshold is number of diffirent words
+				return line
+
+	return ""
+
+def search_list(corpus, list_search, threshold=1):
+	for str_search in list_search:
+		if search_line(corpus, str_search, threshold):
+			return True
+	return False
+
+
+# Remove accent
+def strip_accents(text):
+    """
+    Strip accents from input String.
+
+    :param text: The input string.
+    :type text: String.
+
+    :returns: The processed String.
+    :rtype: String.
+    """
+    try:
+        text = unicode(text, 'utf-8')
+        #print text
+    except (TypeError, NameError): # unicode is a default on python 3 
+        pass
+    text = unicodedata.normalize('NFD', text)
+    text = text.encode('ascii', 'ignore')
+    text = text.decode("utf-8")
+    return str(text)
+
+#Tesseract read
+def read_tesseract_file(img_file,type="thresh"):
+	image = cv2.imread(img_file)
+	if check_image(image):
+		gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+		 
+		# check to see if we should apply thresholding to preprocess the
+		# image
+		if type == "thresh":
+			gray = cv2.threshold(gray, 0, 255,
+				cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+		 
+		# make a check to see if median blurring should be done to remove
+		# noise
+		elif type == "blur":
+			gray = cv2.medianBlur(gray, 3)
+		 
+		# write the grayscale image to disk as a temporary file so we can
+		# apply OCR to it
+		base_name=get_base_name(img_file)
+		path_name=get_path_name(img_file)
+		ext_name="gray"
+		filename = os.path.join(path_name,ext_name+base_name+".png")
+		cv2.imwrite(filename, gray)
+
+		# load the image as a PIL/Pillow image, apply OCR, and then delete
+		# the temporary file
+		text = pytesseract.image_to_string(Image.open(filename))
+		os.remove(filename)
+		return text
+	else:
+		return ""
+
+def read_tesseract_image(image,type="thresh"):
+	if check_image(image):
+		gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+		 
+		# check to see if we should apply thresholding to preprocess the
+		# image
+		if type == "thresh":
+			gray = cv2.threshold(gray, 0, 255,
+				cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+		 
+		# make a check to see if median blurring should be done to remove
+		# noise
+		elif type == "blur":
+			gray = cv2.medianBlur(gray, 3)
+		 
+		# write the grayscale image to disk as a temporary file so we can
+		# apply OCR to it
+		
+		filename = "gray_out.png"
+		cv2.imwrite(filename, gray)
+
+		# load the image as a PIL/Pillow image, apply OCR, and then delete
+		# the temporary file
+		text = pytesseract.image_to_string(Image.open(filename))
+		os.remove(filename)
+		return text
+	else:
+		return ""
 
 # Path processing
 
@@ -146,7 +289,8 @@ if __name__ == '__main__':
 			cv2.imwrite(parap_img_path, parap_img)
 	print check_file_name(filename, reg_string)
 	''' 
-	''' Test 3 :  create_folder and covert_file
+	'''Test 4 crop all file pdf 
+	
 	file_list=read_file_folder("./", "*.pdf")
 	for file in file_list:
 		folder_path=create_folder_filename(file)
@@ -157,9 +301,26 @@ if __name__ == '__main__':
 		print img_list
 		for img_path in img_list:
 			reg_string="(.)*(-)[0-5].png"
-			write_crop_img(img_path, "_parap.png", reg_string)
+			write_crop_img(img_path, "_page_number.png", reg_string, 1463,1540, 2171,2230)
 	'''
 	
-	filename='CA5.pdf'
-	print count_page_pdf(filename)
+	create_folder("1")
+	create_folder("2")
+	search_list=["1/5","2/5","3/5","4/5","5/5","1/6","2/6","3/6","4/6","5/6","6/6"]
+	img_list=read_file_folder("./", "*.png")
+	for file_img in img_list:
+		img_rgb=cv2.imread(file_img,1)
+		img= resize_image(img_rgb,1653, 2339)
+		img_crop=crop_image(img, 1423,1540, 2071,2280)
+		txt=read_tesseract_image(img_crop)
+		#print txt
+		#print search_line("1/5", "2/5",1)
+		find=False
+		for str in search_list:
+			if search_line(txt, str,1):
+				find=True
+
+		if find:
+			print file_img
+
 
